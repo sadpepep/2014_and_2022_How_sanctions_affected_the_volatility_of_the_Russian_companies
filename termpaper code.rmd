@@ -1,0 +1,795 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: inline
+---
+
+Kurzovaya babygirl 2000
+
+```{r}
+install.packages('ggeasy')
+install.packages ("https://cran.r-project.org/src/contrib/Archive/locfit/locfit_1.5-9.2.tar.gz", repos = NULL)
+install.packages("TSA")
+install.packages("rugarch")
+install.packages("fGarch")
+install.packages('urca')
+install.packages('forecast')
+install.packages('strucchange')
+install.packages('garchx')
+library(garchx)
+library(lubridate)
+library(ggplot2)
+library(tibble)
+library(readxl)
+library(dplyr)
+library(TSA)
+library(rugarch)
+library(fGarch)
+library(urca)
+library(forecast)
+library(lmtest)
+library(tseries)
+library(strucchange)
+library(stringr)
+```
+
+Загрузка данных
+
+```{r}
+  # POG
+pog = read.csv('P7G.csv', sep = ',', dec = ',')
+colnames(pog) = c('date', 'close', 'open', 'a', 'b', 'c', 'd')
+pog = pog %>% dplyr::select(date, close, open)
+#форматирование данных
+pog$date = dmy(pog$date)
+pog$open = as.numeric(gsub(",", ".", pog$open))
+pog$close = as.numeric(gsub(",", ".", pog$close))
+
+   # AL
+al = read.csv('A7L.csv', sep = ',', dec = ',')
+colnames(al) = c('date', 'close', 'open', 'a', 'b', 'c', 'd')
+al = al %>% dplyr::select(date, close, open)
+#форматирование данных
+al$date = dmy(al$date)
+al$open = as.numeric(gsub(",", ".", al$open))
+al$close = as.numeric(gsub(",", ".", al$close))
+```
+
+Создание дневных дамми-переменных
+
+```{r}
+unified = left_join(pog, al, by = 'date') %>% na.omit()
+
+dumy = ifelse(unified$date == '2022-03-02' | unified$date == '2014-09-12' | unified$date == '2014-05-12' | unified$date == '2014-03-06', 1, 0)
+
+unified = unified %>% mutate(dumy = dumy)
+
+pog = unified %>% select(date, close = close.x, open = open.x, dumy)
+al = unified %>% select(date, close = close.y, open = open.y, dumy)
+```
+
+Перейдем к лог-доходностям котировок
+
+```{r}
+pog_d = diff(log(pog$close))
+al_d = diff(log(al$close))
+```
+
+Построим графики лог-доходностей
+
+```{r}
+#небольшие приготовления
+
+TABLE_pog_d = data.frame(date = unified$date[-1], log_dif = pog_d) %>% mutate(dumy = unified$dumy[-1]) %>% arrange(date)
+
+TABLE_al_d = data.frame(date = unified$date[-1], log_dif = al_d) %>% mutate(dumy = unified$dumy[-1]) %>% arrange(date)
+
+
+#достанем номера строк с датами объявления санкций
+list = c()
+for (i in 1:length(TABLE_pog_d$date)){
+          
+           if(TABLE_pog_d$dumy[i] == '1'){
+              nums = data.frame(num = i)
+              list = append(list, nums)
+           }
+}
+
+nums = data.frame(n = t(data.frame(list))) %>% rownames_to_column()%>% select(-rowname)
+# length(nums$n) - 4, значит приплюсуем 4 раза geom_vline... sory иначе не получилось
+```  
+
+Графики prosto tak
+
+```{r}
+# Petropavlovsk PLC
+ggplot(data = TABLE_pog_d) + geom_line(aes(x = date, y = log_dif), stat = 'identity') + theme_minimal() + xlab('') + ylab('лог-доходности') + ggtitle('Petropavlovsk PLC') +  ggeasy::easy_center_title() + 
+    geom_vline(data = TABLE_pog_d, aes(xintercept = TABLE_pog_d$date[nums$n[1]]), size = 0.3, col = 'red') +
+    geom_vline(data = TABLE_pog_d, aes(xintercept = TABLE_pog_d$date[nums$n[2]]), size = 0.3, col = 'red') +
+    geom_vline(data = TABLE_pog_d, aes(xintercept = TABLE_pog_d$date[nums$n[3]]), size = 0.3, col = 'red') +
+    geom_vline(data = TABLE_pog_d, aes(xintercept = TABLE_pog_d$date[nums$n[4]]), size = 0.3, col = 'red') +
+  theme_minimal() +
+  theme(axis.line = element_line(colour = "grey50"),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_blank(),
+    panel.background = element_blank()) 
+
+
+# Amour Minerals
+ggplot(data = TABLE_al_d) + geom_line(aes(x = date, y = log_dif), stat = 'identity') + theme_minimal() + xlab('') + ylab('лог-доходности') + ggtitle('Amour Minerals') +  ggeasy::easy_center_title() + 
+    geom_vline(data = TABLE_al_d, aes(xintercept = TABLE_al_d$date[nums$n[1]]), size = 0.3, col = 'red') +
+    geom_vline(data = TABLE_al_d, aes(xintercept = TABLE_al_d$date[nums$n[2]]), size = 0.3, col = 'red') +
+    geom_vline(data = TABLE_al_d, aes(xintercept = TABLE_al_d$date[nums$n[3]]), size = 0.3, col = 'red') +
+    geom_vline(data = TABLE_al_d, aes(xintercept = TABLE_al_d$date[nums$n[4]]), size = 0.3, col = 'red') +
+  theme_minimal() +
+  theme(axis.line = element_line(colour = "grey50"),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_blank(),
+    panel.background = element_blank()) 
+```
+
+Посмотрим на характеристики GARCH(1,1) модели
+
+```{r}
+list = c()
+g1 = 1
+g2 = 1
+
+garchi = function(x){
+  for (type in c('sGARCH', 'eGARCH', 'gjrGARCH')){
+    for (distribution in c('norm', 'std')){
+      for (p in 0:5){
+        for (q in 0:5){
+
+      spec = tryCatch(ugarchspec(variance.model = list(model = type, garchOrder = c(g1, g2)), mean.model = list(armaOrder = c(p, q), include.mean = TRUE), distribution.model = distribution), error = function(e) 'error')
+      garch.fit = tryCatch(ugarchfit(spec, x), error = function(e) 'error')
+      
+      pvalue = tryCatch(Box.test(residuals(garch.fit), lag = log(length(x)), type = c("Ljung-Box"), fitdf = p+q)$p.value, error = function(e) 'error')
+      pvalue_sqv = tryCatch(Box.test(residuals(garch.fit)^2, lag = log(length(x)), type = c("Ljung-Box"), fitdf = p+q)$p.value, error = function(e) 'error')
+      
+      BIC = tryCatch(infocriteria(garch.fit)[2], error = function(e) 'error')
+
+      g_coeff = paste(g1, g2, sep = ',')
+      pq = paste(p, q, sep = ',')
+
+      data = data.frame(values = c(type, distribution, g_coeff, pq, as.numeric(pvalue), as.numeric(pvalue_sqv), as.numeric(BIC)))
+      list = append(list, data.frame(data$values))}}}}
+
+  this = data.frame(parameters = c('type', 'distribution', 'g1,g2', 'p,q', 'pvalue', 'pvalue_sqv', 'BIC'), list)
+  
+  print(this)}
+
+garch_petro = data.frame(t(data.frame(garchi(TABLE_pog_d$log_dif)))) %>% rownames_to_column() %>% select(-rowname)
+
+garch_petro = garch_petro[-1,]
+colnames(garch_petro) = c('type', 'distribution', 'g1,g2', 'p,q', 'pvalue', 'pvalue_sqv','BIC')
+garch_petro = garch_petro %>% dplyr::filter(pvalue != 'NaN')
+garch_petro$pvalue = as.numeric(garch_petro$pvalue)
+garch_petro = garch_petro %>% dplyr::filter(pvalue > 0)
+  
+
+garch_amour = data.frame(t(data.frame(garchi(TABLE_al_d$log_dif)))) %>% rownames_to_column() %>% select(-rowname)
+
+garch_amour = garch_amour[-1,]
+colnames(garch_amour) = c('type', 'distribution', 'g1,g2', 'p,q', 'pvalue', 'pvalue_sqv','BIC')
+garch_amour = garch_amour %>% dplyr::filter(pvalue != 'NaN')
+garch_amour$pvalue = as.numeric(garch_amour$pvalue)
+garch_amour = garch_amour %>% dplyr::filter(pvalue > 0.05)
+```
+
+В моделях Petropavlovsk PLC сохраняется автокорреляция. Разделим выборку на 8 частей, чтобы посмотреть, на всей ли она выборке.
+
+```{r}
+pog_test1 = TABLE_pog_d[1:300,]
+pog_test2 = TABLE_pog_d[301:600,]
+pog_test3 = TABLE_pog_d[601:900,]
+pog_test4 = TABLE_pog_d[901:1200,]
+pog_test5 = TABLE_pog_d[1201:1500,]
+pog_test6 = TABLE_pog_d[1501:1800,]
+pog_test7 = TABLE_pog_d[1801:2100,]
+pog_test8 = TABLE_pog_d[2101:2326,]
+
+
+list = c()
+g1 = 1
+g2 = 1
+
+garchi_Petro = function(x){
+   for (type in c('sGARCH', 'eGARCH', 'gjrGARCH')){
+     for (distribution in c('norm', 'std')){
+       for (p in 0:5){
+         for (q in 0:5){
+
+      spec = tryCatch(ugarchspec(variance.model = list(model = type, garchOrder = c(g1, g2)), mean.model = list(armaOrder = c(p, q), include.mean = TRUE), distribution.model = distribution), error = function(e) 'error')
+      garch.fit = tryCatch(ugarchfit(spec, x), error = function(e) 'error')
+      
+      pvalue = tryCatch(Box.test(residuals(garch.fit), lag = log(length(x)), type = c("Ljung-Box"), fitdf = p+q)$p.value, error = function(e) 'error')
+
+      data = data.frame(values = c(as.numeric(pvalue)))
+      list = append(list, data.frame(data$values))}}}}
+
+  this = data.frame(parameters = c('pvalue'), list)
+}
+
+
+
+maximin = function(x){
+
+  a = garchi_Petro(x)
+  a = a[-1]
+  
+  max_pval = max(as.numeric(a[ , colSums(is.na(a)) == 0]))
+  min_pval = min(as.numeric(a[ , colSums(is.na(a)) == 0]))
+  
+  babe = data.frame(max_pval, min_pval)
+}
+
+pvalues_garch = maximin(pog_test1$log_dif) %>% rbind(maximin(pog_test2$log_dif)) %>%
+  rbind(maximin(pog_test3$log_dif)) %>% rbind(maximin(pog_test4$log_dif)) %>%
+  rbind(maximin(pog_test5$log_dif)) %>% rbind(maximin(pog_test6$log_dif)) %>%
+  rbind(maximin(pog_test7$log_dif)) %>% rbind(maximin(pog_test8$log_dif))
+```
+
+Не на всей. Посмотрим, как это на графике выглядит
+
+```{r}
+experiments = pog_test6 %>% rbind(pog_test7, pog_test8)
+
+covid_date = which(grepl('2020-01-13', experiments$date))
+
+ggplot(data = experiments) + 
+  geom_line(aes(x = date, y = log_dif), stat = 'identity') + xlab('') + ylab('logarithm of stock returns') +
+  geom_vline(data = experiments, aes(xintercept = experiments$date[covid_date]), size = 0.85, col = '#B51D0A') +
+  geom_vline(data = experiments, aes(xintercept = TABLE_pog_d$date[nums$n[4]]), size = 1, col = '#662225') +
+  theme(panel.background = element_rect(fill = "white", colour = 'black'))
+```
+
+Функция для построения GARCH-X моделей
+
+1) с разными коэффициентами g1, g2: от 1 до 3
+2) с разными типами: sGARCH, eGARCH, gjrGARCH
+3) с разными периодами предположительного воздействия санкций
+
+Сперва создадим датафреймы с разными периодами действия санкций
+
+```{r}
+#выводит номер строки с нужной датой
+n.unified = TABLE_pog_d %>% mutate(dif.y = TABLE_al_d$log_dif) %>% select(-dumy)
+n.unified = n.unified %>% mutate(dumy = TABLE_pog_d$dumy)
+colnames(n.unified) = c('date', 'dif.pog', 'dif.al', 'dumy')
+
+start1 = which(grepl('2022-03-02', n.unified$date)) 
+start2 = which(grepl('2014-09-12', n.unified$date))
+start3 = which(grepl('2014-05-12', n.unified$date))
+start4 = which(grepl('2014-03-06', n.unified$date))
+
+
+#daily = n.unified
+#weekly = n.unified
+#monthly = n.unified
+#monthly_3 = n.unified
+yearly = n.unified
+yearly_3 = n.unified
+yearly_5 = n.unified
+
+
+
+for (start in c(start1, start2, start3, start4)){
+  
+    #weekly[ (start + 1) : (start + 7), 4] = 1
+    #monthly[ (start + 1) : (start + 30), 4] = 1
+    #monthly_3[ (start + 1) : (start + 90), 4] = 1
+    yearly[ (start + 1) : (start + 360), 4] = 1
+    yearly = yearly %>% na.omit()
+    yearly_3[ (start + 1) : (start + 360*3), 4] = 1
+    yearly_3 = yearly_3 %>% na.omit()
+    yearly_5[ (start + 1) : (start + 360*5), 4] = 1
+    yearly_5 = yearly_5 %>% na.omit()
+  }
+
+
+#pog_daily = daily %>% select(date, dif.pog, dumy)
+#al_daily = daily %>% select(date, dif.al, dumy)
+
+#pog_weekly = weekly %>% select(date, dif.pog, dumy)
+#al_weekly = weekly %>% select(date, dif.al, dumy)
+
+#pog_monthly = monthly %>% select(date, dif.pog, dumy)
+#al_monthly = monthly %>% select(date, dif.al, dumy)
+
+#pog_monthly3 = monthly_3 %>% select(date, dif.pog, dumy)
+#al_monthly3 = monthly_3 %>% select(date, dif.al, dumy)
+
+pog_yearly = yearly %>% select(date, dif.pog, dumy)
+al_yearly = yearly %>% select(date, dif.al, dumy)
+
+pog_yearly_3 = yearly_3 %>% select(date, dif.pog, dumy)
+al_yearly_3 = yearly_3 %>% select(date, dif.al, dumy)
+
+pog_yearly_5 = yearly_5 %>% select(date, dif.pog, dumy)
+al_yearly_5 = yearly_5 %>% select(date, dif.al, dumy)
+```
+
+Функция herself
+
+```{r}
+list = c()
+
+Xgarchi <- function(period, x, external){
+
+  for (type in c('sGARCH', 'eGARCH', 'gjrGARCH')){
+  
+    for (g1 in 1:3){
+    for (g2 in 1:3){
+      for (p in 0:2){
+      for (q in 0:2){
+        for (distribution in c('norm', 'std')){
+    
+  g_coeff = paste(g1, g2, sep = ',')
+  pq_coeff = paste(p, q, sep = ',')
+  
+  spec = tryCatch(ugarchspec(variance.model = list(model = type, garchOrder = c(g1, g2), external.regressors = matrix(external)), mean.model = list(armaOrder = c(p, q)), distribution.model = distribution), error = function(e) 'error')
+  
+  garch.fit = tryCatch(ugarchfit(spec, x), error = function(e) 'error')
+  
+  BIC = tryCatch(infocriteria(garch.fit)[2], error = function(e) 'error')
+  
+  pvalue = tryCatch(Box.test(residuals(garch.fit), lag = log(length(x)), type = c("Ljung-Box"), fitdf = p+q)$p.value, error = function(e) 'error')
+  
+  data = data.frame(values = c(period, type, distribution, g_coeff, pq_coeff, BIC, pvalue))
+  list = append(list, data.frame(data$values))
+    }
+    }
+    }
+    }
+    }
+  }
+  
+  this = data.frame(parameters = c('period', 'type', 'distribution', 'g1,g2', 'p,q', 'BIC', 'pvalue'), list)
+
+}
+
+
+forfuskssake = function(per, data, dumy){
+  
+  Xgarchi_pog = data.frame( t(data.frame(Xgarchi(per, data, dumy))) ) %>% rownames_to_column() %>% select(-rowname)
+  Xgarchi_pog = Xgarchi_pog[-1,] %>% rownames_to_column() %>% select(-rowname)
+  colnames(Xgarchi_pog) = c('period', 'type', 'distribution', 'g1,g2', 'p,q', 'BIC', 'pvalue')
+
+  print(Xgarchi_pog)
+}
+
+#Xgarchi_pog_daily = forfuskssake('daily', pog_daily$dif.pog, pog_daily$dumy)
+#Xgarchi_pog_weekly = forfuskssake('weekly', pog_weekly$dif.pog, pog_weekly$dumy)
+#Xgarchi_pog_monthly = forfuskssake('monthly', pog_monthly$dif.pog, pog_monthly$dumy)
+#Xgarchi_pog_monthly3 = forfuskssake('monthly_3', pog_monthly3$dif.pog, pog_monthly3$dumy)
+Xgarchi_pog_yearly = forfuskssake('yearly', pog_yearly$dif.pog, pog_yearly$dumy)
+Xgarchi_pog_yearly_3 = forfuskssake('yearly_3', pog_yearly_3$dif.pog, pog_yearly_3$dumy)
+Xgarchi_pog_yearly_5 = forfuskssake('yearly_5', pog_yearly_5$dif.pog, pog_yearly_5$dumy)
+
+Xgarchi_pog = Xgarchi_pog_yearly %>% rbind(Xgarchi_pog_yearly_3, Xgarchi_pog_yearly_5)
+
+Xgarchi_pog = Xgarchi_pog %>% dplyr::filter(pvalue != 'error') %>% dplyr::filter(pvalue != 'NaN')
+
+Xgarchi_pog$pvalue = as.numeric(Xgarchi_pog$pvalue)
+Xgarchi_pog = Xgarchi_pog %>% dplyr::filter(as.numeric(Xgarchi_pog$pvalue) > 0)
+```
+
+```{r}
+list = c()
+
+Xgarchi <- function(period, x, external){
+  
+  for (type in c('sGARCH', 'eGARCH', 'gjrGARCH')){
+  
+    for (g1 in 1:3){
+    for (g2 in 1:3){
+      for (p in 0:4){
+      for (q in 0:4){
+        for (distribution in c('norm', 'std')){
+    
+  g_coeff = paste(g1, g2, sep = ',')
+  pq_coeff = paste(p, q, sep = ',')
+  
+  spec = tryCatch(ugarchspec(variance.model = list(model = type, garchOrder = c(g1, g2), external.regressors = matrix(external)), mean.model = list(armaOrder = c(p, q)), distribution.model = distribution), error = function(e) 'error')
+  
+  garch.fit = tryCatch(ugarchfit(spec, x), error = function(e) 'error')
+  
+  BIC = tryCatch(infocriteria(garch.fit)[2], error = function(e) 'error')
+  
+  pvalue = tryCatch(Box.test(residuals(garch.fit), lag = log(length(x)), type = c("Ljung-Box"), fitdf = p+q)$p.value, error = function(e) 'error')
+  
+  data = data.frame(values = c(period, type, distribution, g_coeff, pq_coeff, BIC, pvalue))
+  list = append(list, data.frame(data$values))
+    }
+    }
+    }
+    }
+    }
+  }
+  
+  this = data.frame(parameters = c('period', 'type', 'distribution', 'g1,g2', 'p,q', 'BIC', 'pvalue'), list)
+
+}
+
+
+forfuskssake = function(per, data, dumy){
+  
+  Xgarchi_al = data.frame( t(data.frame(Xgarchi(per, data, dumy))) ) %>% rownames_to_column() %>% select(-rowname)
+  Xgarchi_al = Xgarchi_al[-1,] %>% rownames_to_column() %>% select(-rowname)
+  colnames(Xgarchi_al) = c('period', 'type', 'distribution', 'g1,g2', 'p,q', 'BIC', 'pvalue')
+  
+  print(Xgarchi_al)
+}
+
+
+#Xgarchi_al_daily = forfuskssake('daily', al_daily$dif.al, al_daily$dumy)
+#Xgarchi_al_weekly = forfuskssake('weekly', al_weekly$dif.al, al_weekly$dumy)
+#Xgarchi_al_monthly = forfuskssake('monthly', al_monthly$dif.al, al_monthly$dumy)
+#Xgarchi_al_monthly3 = forfuskssake('monthly_3', al_monthly3$dif.al, al_monthly3$dumy)
+Xgarchi_al_yearly = forfuskssake('yearly', al_yearly$dif.al, al_yearly$dumy)
+Xgarchi_al_yearly_3 = forfuskssake('yearly_3', al_yearly_3$dif.al, al_yearly_3$dumy)
+Xgarchi_al_yearly_5 = forfuskssake('yearly_5', al_yearly_5$dif.al, al_yearly_5$dumy)
+
+Xgarchi_al = Xgarchi_al_yearly %>% rbind(Xgarchi_al_yearly_3, Xgarchi_al_yearly_5)
+
+Xgarchi_al = Xgarchi_al %>% dplyr::filter(pvalue != 'error') %>% dplyr::filter(pvalue != 'NaN')
+
+Xgarchi_al$pvalue = as.numeric(Xgarchi_al$pvalue)
+Xgarchi_al = Xgarchi_al %>% dplyr::filter(as.numeric(Xgarchi_al$pvalue) > 0.05)
+```
+
+В моделях Petropavlovsk PLC опять сохраняется автокорреляция. Посмотрим, останется ли она при разделении выборки (возьмем только эффект санкций = 1 год и 3 года, потому что R слабая собачка (или мой компик слабая собачка..?), короче код зависает).
+
+```{r}
+pog_yearly_test1 = pog_yearly[1:300,]
+pog_yearly3_test1 = pog_yearly_3[1:300,]
+#pog_yearly5_test1 = pog_yearly_5[1:300,]
+
+pog_yearly_test2 = pog_yearly[301:600,]
+pog_yearly3_test2 = pog_yearly_3[301:600,]
+#pog_yearly5_test2 = pog_yearly_5[301:600,]
+
+pog_yearly_test3 = pog_yearly[601:900,]
+pog_yearly3_test3 = pog_yearly_3[601:900,]
+#pog_yearly5_test3 = pog_yearly_5[601:900,]
+
+pog_yearly_test4 = pog_yearly[901:1200,]
+pog_yearly3_test4 = pog_yearly_3[901:1200,]
+#pog_yearly5_test4 = pog_yearly_5[901:1200,]
+
+pog_yearly_test5 = pog_yearly[1201:1500,]
+pog_yearly3_test5 = pog_yearly_3[1201:1500,]
+#pog_yearly5_test5 = pog_yearly_5[1201:1500,]
+
+pog_yearly_test6 = pog_yearly[1501:1800,]
+pog_yearly3_test6 = pog_yearly_3[1501:1800,]
+#pog_yearly5_test6 = pog_yearly_5[1501:1800,]
+
+pog_yearly_test7 = pog_yearly[1801:2100,]
+pog_yearly3_test7 = pog_yearly_3[1801:2100,]
+#pog_yearly5_test7 = pog_yearly_5[1801:2100,]
+
+pog_yearly_test8 = pog_yearly[2101:2326,]
+pog_yearly3_test8 = pog_yearly_3[2101:2326,]
+#pog_yearly5_test8 = pog_yearly_5[2101:2326,]
+
+
+list = c()
+
+Xgarchi <- function(period, x, external, distribution){
+  
+  for (type in c('sGARCH', 'eGARCH', 'gjrGARCH')){
+  
+    for (g1 in 2:3){
+    for (g2 in 2:3){
+      for (p in 0:2){
+      for (q in 0:2){
+
+    
+  g_coeff = paste(g1, g2, sep = ',')
+  pq_coeff = paste(p, q, sep = ',')
+  
+  spec = tryCatch(ugarchspec(variance.model = list(model = type, garchOrder = c(g1, g2), external.regressors = matrix(external)), mean.model = list(armaOrder = c(p, q)), distribution.model = distribution), error = function(e) 'error')
+  
+  garch.fit = tryCatch(ugarchfit(spec, x), error = function(e) 'error')
+  
+  BIC = tryCatch(infocriteria(garch.fit)[2], error = function(e) 'error')
+  
+  pvalue = tryCatch(Box.test(residuals(garch.fit), lag = log(length(x)), type = c("Ljung-Box"), fitdf = p+q)$p.value, error = function(e) 'error')
+  
+  data = data.frame(values = c(period, type, distribution, g_coeff, pq_coeff, BIC, pvalue))
+  list = append(list, data.frame(data$values))
+    }
+    }
+    }
+    }
+  }
+  
+  this = data.frame(parameters = c('period', 'type', 'distribution', 'g1,g2', 'p,q', 'BIC', 'pvalue'), list)
+  
+  print(this)
+
+}
+
+
+forfuskssake = function(per, data, dumy){
+  
+  garched = data.frame( t(data.frame(Xgarchi(per, data, dumy, 'norm'))) ) %>% rownames_to_column() %>% select(-rowname)
+  garched = garched[-1,] %>% rownames_to_column() %>% select(-rowname)
+  colnames(garched) = c('period', 'type', 'distribution', 'g1,g2', 'p,q', 'BIC', 'pvalue')
+  
+  print(garched)
+
+}
+
+
+oof = function(x){
+
+  functioned = forfuskssake('monthly', x$dif.pog, x$dumy)
+  
+  functioned = functioned %>% dplyr::filter(pvalue != 'error')
+  max_pval = max(as.numeric(functioned$pvalue))
+  min_pval = min(as.numeric(functioned$pvalue))
+  data.frame(max_pval, min_pval)
+
+}
+
+
+yearly = oof(pog_yearly_test1) %>% rbind(oof(pog_yearly_test2)) %>%
+  rbind(oof(pog_yearly_test3)) %>% rbind(oof(pog_yearly_test4)) %>%
+  rbind(oof(pog_yearly_test5)) %>% rbind(oof(pog_yearly_test6)) %>%
+  rbind(oof(pog_yearly_test7)) %>% rbind(oof(pog_yearly_test8))
+
+
+
+
+oof = function(x){
+
+  functioned = forfuskssake('yearly', x$dif.pog, x$dumy)
+  
+  functioned = functioned %>% dplyr::filter(pvalue != 'error')
+  max_pval = max(as.numeric(functioned$pvalue))
+  min_pval = min(as.numeric(functioned$pvalue))
+  data.frame(max_pval, min_pval)
+
+}
+
+
+yearly3 = oof(pog_yearly3_test1) %>% rbind(oof(pog_yearly3_test2)) %>%
+  rbind(oof(pog_yearly3_test3)) %>% rbind(oof(pog_yearly3_test4)) %>%
+  rbind(oof(pog_yearly3_test5)) %>% rbind(oof(pog_yearly3_test6)) %>%
+  rbind(oof(pog_yearly3_test7)) %>% rbind(oof(pog_yearly3_test8))
+```
+
+Finals. Построим модели победительницы
+
+```{r}
+#Benchmark Amour Minerals
+distribution = 'norm'
+g1 = 1
+g2 = 1
+type = 'gjrGARCH'
+p = 0
+q = 1
+x = TABLE_al_d$log_dif
+
+b_amour = ugarchspec(variance.model = list(model = type, garchOrder = c(g1, g2)), mean.model = list(armaOrder = c(p, q), include.mean = TRUE))
+
+b_amour.fit = ugarchfit(b_amour, x)
+
+
+
+#Sanctioned Amour Minerals
+distribution = 'norm'
+g1 = 3
+g2 = 3
+type = 'eGARCH'
+p = 0
+q = 1
+x = al_yearly$dif.al
+external = al_yearly$dumy
+
+s_amour = ugarchspec(variance.model = list(model = type, garchOrder = c(g1, g2), external.regressors = matrix(external)), mean.model = list(armaOrder = c(p, q)), distribution.model = distribution)
+  
+s_amour.fit = ugarchfit(s_amour, x)
+```
+
+```{r}
+#Benchmark Petropavlovsk PLC
+distribution = 'std'
+g1 = 1
+g2 = 1
+type = 'eGARCH'
+p = 0
+q = 0
+x = TABLE_pog_d$log_dif
+
+b_petro = ugarchspec(variance.model = list(model = type, garchOrder = c(g1, g2)), mean.model = list(armaOrder = c(p, q), include.mean = TRUE))
+
+b_petro.fit = ugarchfit(b_petro, x)
+
+
+
+#Sanctioned Petropavlovsk PLC
+distribution = 'std'
+g1 = 1
+g2 = 3
+type = 'eGARCH'
+p = 0
+q = 0
+x = pog_yearly_5$dif.pog
+external = pog_yearly_5$dumy
+
+s_petro = ugarchspec(variance.model = list(model = type, garchOrder = c(g1, g2), external.regressors = matrix(external)), mean.model = list(armaOrder = c(p, q)), distribution.model = distribution)
+  
+s_petro.fit = ugarchfit(s_petro, x)
+```
+
+Попробуем нарисовац график
+
+```{r}
+#небольшие приготовления
+
+AMUR = TABLE_al_d %>% select(-dumy, -date, -log_dif) %>% rownames_to_column() %>% select(-rowname) %>% mutate(date = TABLE_al_d$date, min = '', q.25 = '', mean = TABLE_al_d$log_dif, max = '', q.75 = '')
+AMUR = AMUR[(0.75*length(AMUR$date)) : (length(AMUR$date)), 1:6]
+
+
+PETRO = TABLE_pog_d %>% select(-dumy, -date, -log_dif) %>% rownames_to_column() %>% select(-rowname) %>% mutate(date = TABLE_pog_d$date, min = '', q.25 = '', mean = TABLE_pog_d$log_dif, max = '', q.75 = '')
+PETRO = PETRO[(0.75*length(PETRO$date)) : (length(PETRO$date)), 1:6]
+
+
+#табличка с 1000 днями после конца наблюдений 
+n.ahead = 1000
+date = data.frame(date = seq(as.Date(AMUR[length(AMUR$date),1]+1), by = "day", length.out = n.ahead))
+```
+
+небольшие приготовления опять :")
+
+```{r}
+### Амур Минералс - прогноз бенчмарковая модель
+prognoz_bamur = ugarchforecast(b_amour.fit, n.ahead = n.ahead, quantile = 0.90)
+boot_bamur = ugarchboot(b_amour.fit, method = c("Partial", "Full")[1], n.ahead = n.ahead, n.bootpred = 500)
+
+T.boot_bamur = as.data.frame(t(as.data.frame(boot_bamur, which = "series", type = "summary"))) %>% rownames_to_column() %>% select(-rowname) 
+T.boot_bamur = date %>% cbind(T.boot_bamur) 
+#от конца (70%-ных) данных до конца прогноза
+
+full_bamur = AMUR %>% rbind(T.boot_bamur) %>% rownames_to_column() %>% select(-rowname) 
+#от начала (70%-ных) данных до конца прогноза
+
+last_bamur = full_bamur
+last_bamur$mean[1:length(AMUR$date)] = rep('', length(AMUR$date))
+#только прогноз
+
+
+### Амур Минералс - прогноз санкционная модель
+prognoz_samur = ugarchforecast(s_amour.fit, n.ahead = n.ahead, quantile = 0.90)
+boot_samur = ugarchboot(s_amour.fit, method = c("Partial", "Full")[1], n.ahead = n.ahead, n.bootpred = 500)
+
+T.boot_samur = as.data.frame(t(as.data.frame(boot_samur, which = "series", type = "summary"))) %>% rownames_to_column() %>% select(-rowname) 
+T.boot_samur = date %>% cbind(T.boot_samur) 
+#от конца (70%-ных) данных до конца прогноза
+
+full_samur = AMUR %>% rbind(T.boot_samur) %>% rownames_to_column() %>% select(-rowname) 
+#от начала (70%-ных) данных до конца прогноза
+
+last_samur = full_samur
+last_samur$mean[1:length(AMUR$date)] = rep('', length(AMUR$date))
+#только прогноз
+```
+
+График для Амур Минералс
+
+```{r}
+plot(full_bamur$date, full_bamur$mean, type = 'l', xlab = "", ylab = "logarithm of stock return", main = 'Amur Minerals Corporation\ngjrGARCH(1,1) + ARMA(0,1)')
+lines(last_bamur$date, last_bamur$mean, type = 'l', col = '#444C5C')
+lines(last_bamur$date, last_bamur$q.25, type = 'l', col = '#E1B16A')
+lines(last_bamur$date, last_bamur$q.75, type = 'l', col = '#E1B16A')
+lines(last_bamur$date, last_bamur$max, type = 'l', col = '#CE5A57')
+lines(last_bamur$date, last_bamur$min, type = 'l', col = '#CE5A57')
+  
+
+plot(full_samur$date, full_samur$mean, type = 'l', xlab = "", ylab = "logarithm of stock return", main = 'Amur Minerals Corporation\neGARCH-X(3,3) + ARMA(0,1)')
+lines(last_samur$date, last_samur$mean, type = 'l', col = '#D55448')
+lines(last_samur$date, last_samur$q.25, type = 'l', col = '#FFA577')
+lines(last_samur$date, last_samur$q.75, type = 'l', col = '#FFA577')
+lines(last_samur$date, last_samur$max, type = 'l', col = '#896E69')
+lines(last_samur$date, last_samur$min, type = 'l', col = '#896E69')
+```
+
+И все-таки это надо было делать в разных rmd.......
+
+Петропавловск. All the same: oh shit here we go again так сказать
+
+```{r}
+### Петропавловск - прогноз бенчмарковая модель
+prognoz_bpetro = ugarchforecast(b_petro.fit, n.ahead = n.ahead, quantile = 0.90)
+boot_bpetro = ugarchboot(b_petro.fit, method = c("Partial", "Full")[1], n.ahead = n.ahead, n.bootpred = 500)
+
+T.boot_bpetro = as.data.frame(t(as.data.frame(boot_bpetro, which = "series", type = "summary"))) %>% rownames_to_column() %>% select(-rowname) 
+T.boot_bpetro = date %>% cbind(T.boot_bpetro) 
+#от конца (70%-ных) данных до конца прогноза
+
+full_bpetro = PETRO %>% rbind(T.boot_bpetro) %>% rownames_to_column() %>% select(-rowname) 
+#от начала (70%-ных) данных до конца прогноза
+
+last_bpetro = full_bpetro
+last_bpetro$mean[1:length(PETRO$date)] = rep('', length(PETRO$date))
+#только прогноз
+
+
+### Петропавловск Минералс - прогноз санкционная модель
+prognoz_spetro = ugarchforecast(s_petro.fit, n.ahead = n.ahead, quantile = 0.90)
+boot_spetro = ugarchboot(s_petro.fit, method = c("Partial", "Full")[1], n.ahead = n.ahead, n.bootpred = 500)
+
+T.boot_spetro = as.data.frame(t(as.data.frame(boot_spetro, which = "series", type = "summary"))) %>% rownames_to_column() %>% select(-rowname) 
+T.boot_spetro = date %>% cbind(T.boot_spetro) 
+#от конца (70%-ных) данных до конца прогноза
+
+full_spetro = PETRO %>% rbind(T.boot_spetro) %>% rownames_to_column() %>% select(-rowname) 
+#от начала (70%-ных) данных до конца прогноза
+
+last_spetro = full_spetro
+last_spetro$mean[1:length(PETRO$date)] = rep('', length(PETRO$date))
+#только прогноз
+```
+
+График для Петропавловска
+
+```{r}
+plot(full_bpetro$date, full_bpetro$mean, type = 'l', xlab = "", ylab = "logarithm of stock return", main = 'Petropavlovsk PLC\neGARCH(1,1) + ARMA(0,0)')
+lines(last_bpetro$date, last_bpetro$mean, type = 'l', col = '#444C5C')
+lines(last_bpetro$date, last_bpetro$q.25, type = 'l', col = '#E1B16A')
+lines(last_bpetro$date, last_bpetro$q.75, type = 'l', col = '#E1B16A')
+lines(last_bpetro$date, last_bpetro$max, type = 'l', col = '#CE5A57')
+lines(last_bpetro$date, last_bpetro$min, type = 'l', col = '#CE5A57')
+
+
+plot(full_spetro$date, full_spetro$mean, type = 'l', xlab = "", ylab = "logarithm of stock return", main = 'Petropavlovsk PLC\neGARCH-X(1,3) + ARMA(0,0)')
+lines(last_spetro$date, last_spetro$mean, type = 'l', col = '#D55448')
+lines(last_spetro$date, last_spetro$q.25, type = 'l', col = '#FFA577')
+lines(last_spetro$date, last_spetro$q.75, type = 'l', col = '#FFA577')
+lines(last_spetro$date, last_spetro$max, type = 'l', col = '#896E69')
+lines(last_spetro$date, last_spetro$min, type = 'l', col = '#896E69')
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
